@@ -5,11 +5,11 @@
 package render
 
 import (
-	"bytes"
 	"fmt"
 	"reflect"
 	"sort"
 	"strconv"
+	"strings"
 )
 
 var builtinTypeMap = map[reflect.Kind]string{
@@ -45,22 +45,22 @@ var typeOfInt = reflect.TypeOf(int(1))
 var typeOfUint = reflect.TypeOf(uint(1))
 var typeOfFloat = reflect.TypeOf(10.1)
 
-// Render converts a structure to a string representation. Unline the "%#v"
+// Render converts a structure to a string representation. Unlike the "%#v"
 // format string, this resolves pointer types' contents in structs, maps, and
 // slices/arrays and prints their field values.
 func Render(v interface{}) string {
-	buf := bytes.Buffer{}
+	str := strings.Builder{}
 	s := (*traverseState)(nil)
-	s.render(&buf, 0, reflect.ValueOf(v), false)
-	return buf.String()
+	s.render(&str, 0, reflect.ValueOf(v), false)
+	return str.String()
 }
 
 // renderPointer is called to render a pointer value.
 //
 // This is overridable so that the test suite can have deterministic pointer
 // values in its expectations.
-var renderPointer = func(buf *bytes.Buffer, p uintptr) {
-	fmt.Fprintf(buf, "0x%016x", p)
+var renderPointer = func(str *strings.Builder, p uintptr) {
+	fmt.Fprintf(str, "0x%016x", p)
 }
 
 // traverseState is used to note and avoid recursion as struct members are being
@@ -86,9 +86,9 @@ func (s *traverseState) forkFor(ptr uintptr) *traverseState {
 	return fs
 }
 
-func (s *traverseState) render(buf *bytes.Buffer, ptrs int, v reflect.Value, implicit bool) {
+func (s *traverseState) render(str *strings.Builder, ptrs int, v reflect.Value, implicit bool) {
 	if v.Kind() == reflect.Invalid {
-		buf.WriteString("nil")
+		str.WriteString("nil")
 		return
 	}
 	vt := v.Type()
@@ -120,11 +120,11 @@ func (s *traverseState) render(buf *bytes.Buffer, ptrs int, v reflect.Value, imp
 	if pe != 0 {
 		s = s.forkFor(pe)
 		if s == nil {
-			buf.WriteString("<REC(")
+			str.WriteString("<REC(")
 			if !implicit {
-				writeType(buf, ptrs, vt)
+				writeType(str, ptrs, vt)
 			}
-			buf.WriteString(")>")
+			str.WriteString(")>")
 			return
 		}
 	}
@@ -141,32 +141,32 @@ func (s *traverseState) render(buf *bytes.Buffer, ptrs int, v reflect.Value, imp
 	switch vk {
 	case reflect.Struct:
 		if !implicit {
-			writeType(buf, ptrs, vt)
+			writeType(str, ptrs, vt)
 		}
 		structAnon := vt.Name() == ""
-		buf.WriteRune('{')
+		str.WriteRune('{')
 		for i := 0; i < vt.NumField(); i++ {
 			if i > 0 {
-				buf.WriteString(", ")
+				str.WriteString(", ")
 			}
 			anon := structAnon && isAnon(vt.Field(i).Type)
 
 			if !anon {
-				buf.WriteString(vt.Field(i).Name)
-				buf.WriteRune(':')
+				str.WriteString(vt.Field(i).Name)
+				str.WriteRune(':')
 			}
 
-			s.render(buf, 0, v.Field(i), anon)
+			s.render(str, 0, v.Field(i), anon)
 		}
-		buf.WriteRune('}')
+		str.WriteRune('}')
 
 	case reflect.Slice:
 		if v.IsNil() {
 			if !implicit {
-				writeType(buf, ptrs, vt)
-				buf.WriteString("(nil)")
+				writeType(str, ptrs, vt)
+				str.WriteString("(nil)")
 			} else {
-				buf.WriteString("nil")
+				str.WriteString("nil")
 			}
 			return
 		}
@@ -174,27 +174,27 @@ func (s *traverseState) render(buf *bytes.Buffer, ptrs int, v reflect.Value, imp
 
 	case reflect.Array:
 		if !implicit {
-			writeType(buf, ptrs, vt)
+			writeType(str, ptrs, vt)
 		}
 		anon := vt.Name() == "" && isAnon(vt.Elem())
-		buf.WriteString("{")
+		str.WriteString("{")
 		for i := 0; i < v.Len(); i++ {
 			if i > 0 {
-				buf.WriteString(", ")
+				str.WriteString(", ")
 			}
 
-			s.render(buf, 0, v.Index(i), anon)
+			s.render(str, 0, v.Index(i), anon)
 		}
-		buf.WriteRune('}')
+		str.WriteRune('}')
 
 	case reflect.Map:
 		if !implicit {
-			writeType(buf, ptrs, vt)
+			writeType(str, ptrs, vt)
 		}
 		if v.IsNil() {
-			buf.WriteString("(nil)")
+			str.WriteString("(nil)")
 		} else {
-			buf.WriteString("{")
+			str.WriteString("{")
 
 			mkeys := v.MapKeys()
 			tryAndSortMapKeys(vt, mkeys)
@@ -204,14 +204,14 @@ func (s *traverseState) render(buf *bytes.Buffer, ptrs int, v reflect.Value, imp
 			valAnon := vt.Name() == "" && isAnon(vt.Elem())
 			for i, mk := range mkeys {
 				if i > 0 {
-					buf.WriteString(", ")
+					str.WriteString(", ")
 				}
 
-				s.render(buf, 0, mk, keyAnon)
-				buf.WriteString(":")
-				s.render(buf, 0, v.MapIndex(mk), valAnon)
+				s.render(str, 0, mk, keyAnon)
+				str.WriteString(":")
+				s.render(str, 0, v.MapIndex(mk), valAnon)
 			}
-			buf.WriteRune('}')
+			str.WriteRune('}')
 		}
 
 	case reflect.Ptr:
@@ -219,52 +219,52 @@ func (s *traverseState) render(buf *bytes.Buffer, ptrs int, v reflect.Value, imp
 		fallthrough
 	case reflect.Interface:
 		if v.IsNil() {
-			writeType(buf, ptrs, v.Type())
-			buf.WriteString("(nil)")
+			writeType(str, ptrs, v.Type())
+			str.WriteString("(nil)")
 		} else {
-			s.render(buf, ptrs, v.Elem(), false)
+			s.render(str, ptrs, v.Elem(), false)
 		}
 
 	case reflect.Chan, reflect.Func, reflect.UnsafePointer:
-		writeType(buf, ptrs, vt)
-		buf.WriteRune('(')
-		renderPointer(buf, v.Pointer())
-		buf.WriteRune(')')
+		writeType(str, ptrs, vt)
+		str.WriteRune('(')
+		renderPointer(str, v.Pointer())
+		str.WriteRune(')')
 
 	default:
 		tstr := vt.String()
 		implicit = implicit || (ptrs == 0 && builtinTypeMap[vk] == tstr)
 		if !implicit {
-			writeType(buf, ptrs, vt)
-			buf.WriteRune('(')
+			writeType(str, ptrs, vt)
+			str.WriteRune('(')
 		}
 
 		switch vk {
 		case reflect.String:
-			fmt.Fprintf(buf, "%q", v.String())
+			fmt.Fprintf(str, "%q", v.String())
 		case reflect.Bool:
-			fmt.Fprintf(buf, "%v", v.Bool())
+			fmt.Fprintf(str, "%v", v.Bool())
 
 		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-			fmt.Fprintf(buf, "%d", v.Int())
+			fmt.Fprintf(str, "%d", v.Int())
 
 		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-			fmt.Fprintf(buf, "%d", v.Uint())
+			fmt.Fprintf(str, "%d", v.Uint())
 
 		case reflect.Float32, reflect.Float64:
-			fmt.Fprintf(buf, "%g", v.Float())
+			fmt.Fprintf(str, "%g", v.Float())
 
 		case reflect.Complex64, reflect.Complex128:
-			fmt.Fprintf(buf, "%g", v.Complex())
+			fmt.Fprintf(str, "%g", v.Complex())
 		}
 
 		if !implicit {
-			buf.WriteRune(')')
+			str.WriteRune(')')
 		}
 	}
 }
 
-func writeType(buf *bytes.Buffer, ptrs int, t reflect.Type) {
+func writeType(str *strings.Builder, ptrs int, t reflect.Type) {
 	parens := ptrs > 0
 	switch t.Kind() {
 	case reflect.Chan, reflect.Func, reflect.UnsafePointer:
@@ -272,9 +272,9 @@ func writeType(buf *bytes.Buffer, ptrs int, t reflect.Type) {
 	}
 
 	if parens {
-		buf.WriteRune('(')
+		str.WriteRune('(')
 		for i := 0; i < ptrs; i++ {
-			buf.WriteRune('*')
+			str.WriteRune('*')
 		}
 	}
 
@@ -284,49 +284,49 @@ func writeType(buf *bytes.Buffer, ptrs int, t reflect.Type) {
 			// This pointer was referenced from within writeType (e.g., as part of
 			// rendering a list), and so hasn't had its pointer asterisk accounted
 			// for.
-			buf.WriteRune('*')
+			str.WriteRune('*')
 		}
-		writeType(buf, 0, t.Elem())
+		writeType(str, 0, t.Elem())
 
 	case reflect.Interface:
 		if n := t.Name(); n != "" {
-			buf.WriteString(t.String())
+			str.WriteString(t.String())
 		} else {
-			buf.WriteString("interface{}")
+			str.WriteString("interface{}")
 		}
 
 	case reflect.Array:
-		buf.WriteRune('[')
-		buf.WriteString(strconv.FormatInt(int64(t.Len()), 10))
-		buf.WriteRune(']')
-		writeType(buf, 0, t.Elem())
+		str.WriteRune('[')
+		str.WriteString(strconv.FormatInt(int64(t.Len()), 10))
+		str.WriteRune(']')
+		writeType(str, 0, t.Elem())
 
 	case reflect.Slice:
 		if t == reflect.SliceOf(t.Elem()) {
-			buf.WriteString("[]")
-			writeType(buf, 0, t.Elem())
+			str.WriteString("[]")
+			writeType(str, 0, t.Elem())
 		} else {
 			// Custom slice type, use type name.
-			buf.WriteString(t.String())
+			str.WriteString(t.String())
 		}
 
 	case reflect.Map:
 		if t == reflect.MapOf(t.Key(), t.Elem()) {
-			buf.WriteString("map[")
-			writeType(buf, 0, t.Key())
-			buf.WriteRune(']')
-			writeType(buf, 0, t.Elem())
+			str.WriteString("map[")
+			writeType(str, 0, t.Key())
+			str.WriteRune(']')
+			writeType(str, 0, t.Elem())
 		} else {
 			// Custom map type, use type name.
-			buf.WriteString(t.String())
+			str.WriteString(t.String())
 		}
 
 	default:
-		buf.WriteString(t.String())
+		str.WriteString(t.String())
 	}
 
 	if parens {
-		buf.WriteRune(')')
+		str.WriteRune(')')
 	}
 }
 

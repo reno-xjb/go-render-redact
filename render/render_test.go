@@ -5,19 +5,19 @@
 package render
 
 import (
-	"bytes"
 	"fmt"
 	"reflect"
 	"regexp"
 	"runtime"
+	"strings"
 	"testing"
 )
 
 func init() {
 	// For testing purposes, pointers will render as "PTR" so that they are
 	// deterministic.
-	renderPointer = func(buf *bytes.Buffer, p uintptr) {
-		buf.WriteString("PTR")
+	renderPointer = func(str *strings.Builder, p uintptr) {
+		str.WriteString("PTR")
 	}
 }
 
