@@ -35,11 +35,12 @@ func TestRenderList(t *testing.T) {
 	// Note that we make some of the fields exportable. This is to avoid a fun case
 	// where the first reflect.Value has a read-only bit set, but follow-on values
 	// do not, so recursion tests are off by one.
+	// "redact" tag should have no impact here
 	type testStruct struct {
-		Name string
-		I    interface{}
+		Name string      `redact:"REDACT"`
+		I    interface{} `redact:"REDACT"`
 
-		m string
+		m string `redact:"REDACT"`
 	}
 
 	type myStringSlice []string
@@ -114,7 +115,7 @@ func TestRenderRecursiveStruct(t *testing.T) {
 	s.I = s
 
 	assertRendersLike(t, "Recursive struct", s,
-		`(*render.testStruct){Name:"recursive", I:<REC(*render.testStruct)>}`)
+		`(*render.testStruct){Name:"recursive", I:<recursive(*render.testStruct)>}`)
 }
 
 func TestRenderRecursiveArray(t *testing.T) {
@@ -123,7 +124,7 @@ func TestRenderRecursiveArray(t *testing.T) {
 	a[1] = &a
 
 	assertRendersLike(t, "Recursive array", &a,
-		`(*[2]interface{}){<REC(*[2]interface{})>, <REC(*[2]interface{})>}`)
+		`(*[2]interface{}){<recursive(*[2]interface{})>, <recursive(*[2]interface{})>}`)
 }
 
 func TestRenderRecursiveMap(t *testing.T) {
@@ -136,9 +137,9 @@ func TestRenderRecursiveMap(t *testing.T) {
 	assertRendersLike(t, "Recursive map", v,
 		`[]map[string]interface{}{{`+
 			`"bar":[]*string{(*string)("foo"), (*string)("foo")}, `+
-			`"foo":<REC(map[string]interface{})>}, {`+
+			`"foo":<recursive(map[string]interface{})>}, {`+
 			`"bar":[]*string{(*string)("foo"), (*string)("foo")}, `+
-			`"foo":<REC(map[string]interface{})>}}`)
+			`"foo":<recursive(map[string]interface{})>}}`)
 }
 
 func TestRenderImplicitType(t *testing.T) {
@@ -269,5 +270,94 @@ func TestMapSortRendering(t *testing.T) {
 
 	for _, tc := range tcs {
 		assertRendersLike(t, reflect.TypeOf(tc.in).Name(), tc.in, tc.expect)
+	}
+}
+
+func assertRedactsLike(t *testing.T, name string, v interface{}, exp string, opts *Options) {
+	var act string
+	if opts == nil {
+		act = Redact(v)
+	} else {
+		marshaller, err := NewMarshaller(opts)
+		if err != nil {
+			t.Fatalf("Error on creating marshaller: %v", err)
+		}
+		act = marshaller.Redact(v)
+	}
+	if act != exp {
+		_, _, line, _ := runtime.Caller(1)
+		t.Errorf("On line #%d, [%s] did not match expectations:\nExpected: %s\nActual  : %s\n", line, name, exp, act)
+	}
+}
+
+func TestRedact(t *testing.T) {
+	t.Parallel()
+
+	type testStruct struct {
+		Name string `redact:"REDACT"`
+		I    interface{}
+
+		m string `redact:"REDACT"`
+	}
+
+	for i, tc := range []struct {
+		a interface{}
+		s string
+	}{
+		{(*testStruct)(nil), `(*render.testStruct)(nil)`},
+		{(**testStruct)(nil), `(**render.testStruct)(nil)`},
+		{[]***testStruct(nil), `[]***render.testStruct(nil)`},
+		{testStruct{Name: "foo", I: &testStruct{Name: "baz"}},
+			`render.testStruct{Name:<redacted>, I:(*render.testStruct){Name:<redacted>, I:interface{}(nil), m:<redacted>}, m:<redacted>}`},
+		{[]*testStruct{
+			{Name: "foo"},
+			{Name: "bar"},
+		}, `[]*render.testStruct{(*render.testStruct){Name:<redacted>, I:interface{}(nil), m:<redacted>}, ` +
+			`(*render.testStruct){Name:<redacted>, I:interface{}(nil), m:<redacted>}}`},
+		{struct {
+			a int `redact:"REDACT"`
+			b string
+		}{123, "foo"}, `struct { a int "redact:\"REDACT\""; b string }{<redacted>, "foo"}`},
+		{[]interface{}{nil, 1, 2, testStruct{Name: "foo"}}, `[]interface{}{interface{}(nil), 1, 2, render.testStruct{Name:<redacted>, I:interface{}(nil), m:<redacted>}}`},
+	} {
+		assertRedactsLike(t, fmt.Sprintf("Input #%d", i), tc.a, tc.s, nil)
+	}
+}
+
+func TestOptions(t *testing.T) {
+	t.Parallel()
+
+	type testStruct struct {
+		Name string `my-tag:"REDACT"`
+		I    interface{}
+
+		m string `my-tag:"REDACT"`
+	}
+
+	for i, tc := range []struct {
+		a interface{}
+		s string
+	}{
+		{(*testStruct)(nil), `(*render.testStruct)(nil)`},
+		{(**testStruct)(nil), `(**render.testStruct)(nil)`},
+		{[]***testStruct(nil), `[]***render.testStruct(nil)`},
+		{testStruct{Name: "foo", I: &testStruct{Name: "baz"}},
+			`render.testStruct{Name:<••••>, I:(*render.testStruct){Name:<••••>, I:interface{}(nil), m:<••••>}, m:<••••>}`},
+		{[]*testStruct{
+			{Name: "foo"},
+			{Name: "bar"},
+		}, `[]*render.testStruct{(*render.testStruct){Name:<••••>, I:interface{}(nil), m:<••••>}, ` +
+			`(*render.testStruct){Name:<••••>, I:interface{}(nil), m:<••••>}}`},
+		{struct {
+			a int `my-tag:"REDACT"`
+			b string
+		}{123, "foo"}, `struct { a int "my-tag:\"REDACT\""; b string }{<••••>, "foo"}`},
+		{[]interface{}{nil, 1, 2, testStruct{Name: "foo"}}, `[]interface{}{interface{}(nil), 1, 2, render.testStruct{Name:<••••>, I:interface{}(nil), m:<••••>}}`},
+	} {
+		opts := &Options{
+			Tag:            "my-tag",
+			RedactedString: "••••",
+		}
+		assertRedactsLike(t, fmt.Sprintf("Input #%d", i), tc.a, tc.s, opts)
 	}
 }

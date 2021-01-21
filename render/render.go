@@ -45,14 +45,29 @@ var typeOfInt = reflect.TypeOf(int(1))
 var typeOfUint = reflect.TypeOf(uint(1))
 var typeOfFloat = reflect.TypeOf(10.1)
 
+type options struct {
+	recursiveString string
+	redact          bool
+	redactTag       string
+	redactedString  string
+}
+
 // Render converts a structure to a string representation. Unlike the "%#v"
 // format string, this resolves pointer types' contents in structs, maps, and
 // slices/arrays and prints their field values.
 func Render(v interface{}) string {
-	str := strings.Builder{}
-	s := (*traverseState)(nil)
-	s.render(&str, 0, reflect.ValueOf(v), false)
-	return str.String()
+	m := newDefaultMarshaller()
+	return m.Render(v)
+}
+
+// Redact converts a structure to a string representation. Unlike the "%#v"
+// format string, this resolves pointer types' contents in structs, maps, and
+// slices/arrays and prints their field values.
+// It also redacts fields that are marke with a specific tag, that can be
+// configured in options
+func Redact(v interface{}) string {
+	m := newDefaultMarshaller()
+	return m.Redact(v)
 }
 
 // renderPointer is called to render a pointer value.
@@ -86,7 +101,7 @@ func (s *traverseState) forkFor(ptr uintptr) *traverseState {
 	return fs
 }
 
-func (s *traverseState) render(str *strings.Builder, ptrs int, v reflect.Value, implicit bool) {
+func (s *traverseState) render(str *strings.Builder, ptrs int, v reflect.Value, implicit bool, opts *options) {
 	if v.Kind() == reflect.Invalid {
 		str.WriteString("nil")
 		return
@@ -120,7 +135,9 @@ func (s *traverseState) render(str *strings.Builder, ptrs int, v reflect.Value, 
 	if pe != 0 {
 		s = s.forkFor(pe)
 		if s == nil {
-			str.WriteString("<REC(")
+			str.WriteRune('<')
+			str.WriteString(opts.recursiveString)
+			str.WriteRune('(')
 			if !implicit {
 				writeType(str, ptrs, vt)
 			}
@@ -155,8 +172,10 @@ func (s *traverseState) render(str *strings.Builder, ptrs int, v reflect.Value, 
 				str.WriteString(vt.Field(i).Name)
 				str.WriteRune(':')
 			}
-
-			s.render(str, 0, v.Field(i), anon)
+			if opts.redact && redactInterfaceField(str, vt.Field(i), v.Field(i), opts) {
+				continue
+			}
+			s.render(str, 0, v.Field(i), anon, opts)
 		}
 		str.WriteRune('}')
 
@@ -183,7 +202,7 @@ func (s *traverseState) render(str *strings.Builder, ptrs int, v reflect.Value, 
 				str.WriteString(", ")
 			}
 
-			s.render(str, 0, v.Index(i), anon)
+			s.render(str, 0, v.Index(i), anon, opts)
 		}
 		str.WriteRune('}')
 
@@ -207,9 +226,9 @@ func (s *traverseState) render(str *strings.Builder, ptrs int, v reflect.Value, 
 					str.WriteString(", ")
 				}
 
-				s.render(str, 0, mk, keyAnon)
+				s.render(str, 0, mk, keyAnon, opts)
 				str.WriteString(":")
-				s.render(str, 0, v.MapIndex(mk), valAnon)
+				s.render(str, 0, v.MapIndex(mk), valAnon, opts)
 			}
 			str.WriteRune('}')
 		}
@@ -222,7 +241,7 @@ func (s *traverseState) render(str *strings.Builder, ptrs int, v reflect.Value, 
 			writeType(str, ptrs, v.Type())
 			str.WriteString("(nil)")
 		} else {
-			s.render(str, ptrs, v.Elem(), false)
+			s.render(str, ptrs, v.Elem(), false, opts)
 		}
 
 	case reflect.Chan, reflect.Func, reflect.UnsafePointer:
@@ -474,4 +493,19 @@ func tryAndSortMapKeys(mt reflect.Type, k []reflect.Value) {
 	if cmp := cmpForType(mt.Key()); cmp != nil {
 		sort.Sort(sortableValueSlice{cmp, k})
 	}
+}
+
+func redactInterfaceField(str *strings.Builder, ft reflect.StructField, fv reflect.Value, opts *options) bool {
+	tag, ok := ft.Tag.Lookup(opts.redactTag)
+	if !ok {
+		return false
+	}
+	switch tag {
+	case REDACT:
+		str.WriteRune('<')
+		str.WriteString(opts.redactedString)
+		str.WriteRune('>')
+		return true
+	}
+	return false
 }
