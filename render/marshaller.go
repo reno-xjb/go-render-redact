@@ -18,7 +18,9 @@ const (
 
 // Constants
 const (
-	REDACT = "REDACT"
+	REMOVE  = "REMOVE"
+	REPLACE = "REPLACE"
+	MASK    = "MASK"
 )
 
 // Marshaller allow to configure options for rendering or redacting
@@ -26,22 +28,35 @@ type Marshaller struct {
 	options *options
 }
 
+var defaultRenderOptions = renderOptions{
+	recursiveString: RECURSIVE,
+}
+var defaultRedactOptions = redactOptions{
+	active:            false,
+	tag:               TAG,
+	replacementString: REDACTED,
+	maskingChar:       '#',
+	maskingLength:     4,
+	maskingReverse:    false,
+}
+
 func newDefaultMarshaller() *Marshaller {
 	return &Marshaller{
 		options: &options{
-			recursiveString: RECURSIVE,
-			redact:          false,
-			redactTag:       TAG,
-			redactedString:  REDACTED,
+			render: defaultRenderOptions,
+			redact: defaultRedactOptions,
 		},
 	}
 }
 
 // Options allow to configure render
 type Options struct {
-	RecursiveString string
-	Tag             string
-	RedactedString  string
+	RenderRecursiveString   string
+	RedactTag               string
+	RedactReplacementString string
+	RedactMaskingChar       rune
+	RedactMaskingLength     int
+	RedactMaskingReverse    bool
 }
 
 // NewMarshaller creates a Marshaller with custom options
@@ -50,29 +65,42 @@ func NewMarshaller(opts *Options) (*Marshaller, error) {
 	if opts == nil {
 		return m, nil
 	}
-	if len(opts.RecursiveString) != 0 {
-		err := validateRecursiveString(opts.RecursiveString)
+	if len(opts.RenderRecursiveString) != 0 {
+		err := validateRecursiveString(opts.RenderRecursiveString)
 		if err != nil {
-			return nil, errors.Wrap(err, "invalid 'RecursiveString' option")
+			return nil, errors.Wrap(err, "invalid 'RedactRecursiveString' option")
 		}
-		m.options.recursiveString = opts.RecursiveString
+		m.options.render.recursiveString = opts.RenderRecursiveString
 	}
 
-	if len(opts.RedactedString) != 0 {
-		err := validateRedactedString(opts.RedactedString)
+	if len(opts.RedactTag) != 0 {
+		err := validateTag(opts.RedactTag)
 		if err != nil {
-			return nil, errors.Wrap(err, "invalid 'RedactedString' option")
+			return nil, errors.Wrap(err, "invalid 'RedactTag' option")
 		}
-		m.options.redactedString = opts.RedactedString
+		m.options.redact.tag = opts.RedactTag
 	}
 
-	if len(opts.Tag) != 0 {
-		err := validateTag(opts.Tag)
+	if len(opts.RedactReplacementString) != 0 {
+		err := validateReplacementString(opts.RedactReplacementString)
 		if err != nil {
-			return nil, errors.Wrap(err, "invalid 'Tag' option")
+			return nil, errors.Wrap(err, "invalid 'RedactRedactedString' option")
 		}
-		m.options.redactTag = opts.Tag
+		m.options.redact.replacementString = opts.RedactReplacementString
 	}
+
+	if opts.RedactMaskingChar != 0 {
+		m.options.redact.maskingChar = opts.RedactMaskingChar
+	}
+
+	if opts.RedactMaskingLength != 0 {
+		m.options.redact.maskingLength = opts.RedactMaskingLength
+	}
+
+	if opts.RedactMaskingReverse {
+		m.options.redact.maskingReverse = opts.RedactMaskingReverse
+	}
+
 	return m, nil
 }
 
@@ -82,7 +110,7 @@ func NewMarshaller(opts *Options) (*Marshaller, error) {
 func (m *Marshaller) Render(v interface{}) string {
 	str := strings.Builder{}
 	s := (*traverseState)(nil)
-	s.render(&str, 0, reflect.ValueOf(v), false, m.options)
+	s.render(&str, 0, reflect.ValueOf(v), false, false, m.options)
 	return str.String()
 }
 
@@ -95,8 +123,8 @@ func (m *Marshaller) Redact(v interface{}) string {
 	str := strings.Builder{}
 	s := (*traverseState)(nil)
 	opts := m.options
-	opts.redact = true
-	s.render(&str, 0, reflect.ValueOf(v), false, opts)
+	opts.redact.active = true
+	s.render(&str, 0, reflect.ValueOf(v), false, false, opts)
 	return str.String()
 }
 
@@ -106,7 +134,7 @@ var tagRegex = regexp.MustCompile(tagRegexString)
 func validateRecursiveString(recursiveString string) error {
 	return nil
 }
-func validateRedactedString(redactedString string) error {
+func validateReplacementString(redactedString string) error {
 	return nil
 }
 func validateTag(tag string) error {

@@ -46,10 +46,20 @@ var typeOfUint = reflect.TypeOf(uint(1))
 var typeOfFloat = reflect.TypeOf(10.1)
 
 type options struct {
+	render renderOptions
+	redact redactOptions
+}
+
+type renderOptions struct {
 	recursiveString string
-	redact          bool
-	redactTag       string
-	redactedString  string
+}
+type redactOptions struct {
+	active            bool
+	tag               string
+	replacementString string
+	maskingChar       rune
+	maskingLength     int
+	maskingReverse    bool
 }
 
 // Render converts a structure to a string representation. Unlike the "%#v"
@@ -74,8 +84,12 @@ func Redact(v interface{}) string {
 //
 // This is overridable so that the test suite can have deterministic pointer
 // values in its expectations.
-var renderPointer = func(str *strings.Builder, p uintptr) {
-	fmt.Fprintf(str, "0x%016x", p)
+var renderPointer = func(str *strings.Builder, p uintptr, mask bool, opts *options) {
+	if mask {
+		opts.mask(str, fmt.Sprintf("0x%016x", p))
+	} else {
+		fmt.Fprintf(str, "0x%016x", p)
+	}
 }
 
 // traverseState is used to note and avoid recursion as struct members are being
@@ -101,7 +115,7 @@ func (s *traverseState) forkFor(ptr uintptr) *traverseState {
 	return fs
 }
 
-func (s *traverseState) render(str *strings.Builder, ptrs int, v reflect.Value, implicit bool, opts *options) {
+func (s *traverseState) render(str *strings.Builder, ptrs int, v reflect.Value, implicit bool, mask bool, opts *options) {
 	if v.Kind() == reflect.Invalid {
 		str.WriteString("nil")
 		return
@@ -136,7 +150,7 @@ func (s *traverseState) render(str *strings.Builder, ptrs int, v reflect.Value, 
 		s = s.forkFor(pe)
 		if s == nil {
 			str.WriteRune('<')
-			str.WriteString(opts.recursiveString)
+			str.WriteString(opts.render.recursiveString)
 			str.WriteRune('(')
 			if !implicit {
 				writeType(str, ptrs, vt)
@@ -163,19 +177,19 @@ func (s *traverseState) render(str *strings.Builder, ptrs int, v reflect.Value, 
 		structAnon := vt.Name() == ""
 		str.WriteRune('{')
 		for i := 0; i < vt.NumField(); i++ {
-			if i > 0 {
+			anon := structAnon && isAnon(vt.Field(i).Type)
+			if opts.redact.active && s.redactField(str, vt, v, i, anon, mask, opts) {
+				continue
+			}
+			if i > 0 && (!opts.redact.active || !opts.isRemoved(vt.Field(i-1))) {
 				str.WriteString(", ")
 			}
-			anon := structAnon && isAnon(vt.Field(i).Type)
 
 			if !anon {
 				str.WriteString(vt.Field(i).Name)
 				str.WriteRune(':')
 			}
-			if opts.redact && redactInterfaceField(str, vt.Field(i), v.Field(i), opts) {
-				continue
-			}
-			s.render(str, 0, v.Field(i), anon, opts)
+			s.render(str, 0, v.Field(i), anon, false, opts)
 		}
 		str.WriteRune('}')
 
@@ -202,7 +216,7 @@ func (s *traverseState) render(str *strings.Builder, ptrs int, v reflect.Value, 
 				str.WriteString(", ")
 			}
 
-			s.render(str, 0, v.Index(i), anon, opts)
+			s.render(str, 0, v.Index(i), anon, mask, opts)
 		}
 		str.WriteRune('}')
 
@@ -226,9 +240,9 @@ func (s *traverseState) render(str *strings.Builder, ptrs int, v reflect.Value, 
 					str.WriteString(", ")
 				}
 
-				s.render(str, 0, mk, keyAnon, opts)
+				s.render(str, 0, mk, keyAnon, false, opts)
 				str.WriteString(":")
-				s.render(str, 0, v.MapIndex(mk), valAnon, opts)
+				s.render(str, 0, v.MapIndex(mk), valAnon, mask, opts)
 			}
 			str.WriteRune('}')
 		}
@@ -241,13 +255,13 @@ func (s *traverseState) render(str *strings.Builder, ptrs int, v reflect.Value, 
 			writeType(str, ptrs, v.Type())
 			str.WriteString("(nil)")
 		} else {
-			s.render(str, ptrs, v.Elem(), false, opts)
+			s.render(str, ptrs, v.Elem(), false, mask, opts)
 		}
 
 	case reflect.Chan, reflect.Func, reflect.UnsafePointer:
 		writeType(str, ptrs, vt)
 		str.WriteRune('(')
-		renderPointer(str, v.Pointer())
+		renderPointer(str, v.Pointer(), mask, opts)
 		str.WriteRune(')')
 
 	default:
@@ -260,21 +274,34 @@ func (s *traverseState) render(str *strings.Builder, ptrs int, v reflect.Value, 
 
 		switch vk {
 		case reflect.String:
-			fmt.Fprintf(str, "%q", v.String())
-		case reflect.Bool:
-			fmt.Fprintf(str, "%v", v.Bool())
+			value := v.String()
+			if mask {
+				valueStr := strings.Builder{}
+				opts.mask(&valueStr, value)
+				value = valueStr.String()
+			}
+			fmt.Fprintf(str, "%q", value)
+		default:
+			valueStr := strings.Builder{}
+			switch vk {
+			case reflect.Bool:
+				fmt.Fprintf(&valueStr, "%v", v.Bool())
+			case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+				fmt.Fprintf(&valueStr, "%d", v.Int())
 
-		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-			fmt.Fprintf(str, "%d", v.Int())
+			case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+				fmt.Fprintf(&valueStr, "%d", v.Uint())
 
-		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-			fmt.Fprintf(str, "%d", v.Uint())
-
-		case reflect.Float32, reflect.Float64:
-			fmt.Fprintf(str, "%g", v.Float())
-
-		case reflect.Complex64, reflect.Complex128:
-			fmt.Fprintf(str, "%g", v.Complex())
+			case reflect.Float32, reflect.Float64:
+				fmt.Fprintf(&valueStr, "%g", v.Float())
+			case reflect.Complex64, reflect.Complex128:
+				fmt.Fprintf(&valueStr, "%g", v.Complex())
+			}
+			if mask {
+				opts.mask(str, valueStr.String())
+			} else {
+				str.WriteString(valueStr.String())
+			}
 		}
 
 		if !implicit {
@@ -495,16 +522,65 @@ func tryAndSortMapKeys(mt reflect.Type, k []reflect.Value) {
 	}
 }
 
-func redactInterfaceField(str *strings.Builder, ft reflect.StructField, fv reflect.Value, opts *options) bool {
-	tag, ok := ft.Tag.Lookup(opts.redactTag)
+func (s *traverseState) redactField(str *strings.Builder, vt reflect.Type, v reflect.Value, i int, anon bool, mask bool, opts *options) bool {
+	tag, ok := vt.Field(i).Tag.Lookup(opts.redact.tag)
 	if !ok {
 		return false
 	}
 	switch tag {
-	case REDACT:
-		str.WriteRune('<')
-		str.WriteString(opts.redactedString)
-		str.WriteRune('>')
+	case REMOVE:
+		// no field, no value
+		return true
+	default:
+		// write field
+		if i > 0 {
+			str.WriteString(", ")
+		}
+		if !anon {
+			str.WriteString(vt.Field(i).Name)
+			str.WriteRune(':')
+		}
+		switch {
+		case tag == REPLACE:
+			str.WriteRune('<')
+			str.WriteString(opts.redact.replacementString)
+			str.WriteRune('>')
+			return true
+		case tag == MASK || mask:
+			s.render(str, 0, v.Field(i), anon, true, opts)
+			return true
+		}
+	}
+	return false
+}
+
+func (o *options) mask(str *strings.Builder, value string) {
+	if !o.redact.active {
+		str.WriteString(value)
+		return
+	}
+	// whole string
+	if o.redact.maskingLength < 0 || o.redact.maskingLength >= len(value) {
+		str.WriteString(strings.Repeat(string(o.redact.maskingChar), len(value)))
+		return
+	}
+	// reverse
+	if o.redact.maskingReverse {
+		str.WriteString(value[:len(value)-o.redact.maskingLength])
+		str.WriteString(strings.Repeat(string(o.redact.maskingChar), o.redact.maskingLength))
+		return
+	}
+	// straight
+	str.WriteString(strings.Repeat(string(o.redact.maskingChar), o.redact.maskingLength))
+	str.WriteString(value[o.redact.maskingLength:])
+}
+
+func (o *options) isRemoved(vt reflect.StructField) bool {
+	tag, ok := vt.Tag.Lookup(o.redact.tag)
+	if !ok {
+		return false
+	}
+	if tag == REMOVE {
 		return true
 	}
 	return false

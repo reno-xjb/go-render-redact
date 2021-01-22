@@ -1,10 +1,12 @@
-go-render: A verbose recursive Go type-to-string conversion library.
-====================================================================
+go-render-redact: A verbose recursive Go type-to-string conversion library, alongside redacting tools
+=====================================================================================================
 
-[![GoDoc](https://godoc.org/github.com/luci/go-render?status.svg)](https://godoc.org/github.com/luci/go-render)
-[![Build Status](https://travis-ci.org/luci/go-render.svg)](https://travis-ci.org/luci/go-render)
+[![GoDoc](https://godoc.org/github.com/reno-xjb/go-render-redact?status.svg)](https://godoc.org/github.com/reno-xjb/go-render-redact)
+[![Build Status](https://travis-ci.org/reno-xjb/go-render-redact.svg)](https://travis-ci.org/reno-xjb/go-render-redact)
 
-This is not an official Google product.
+Forked from https://github.com/luci/go-render
+
+This fork adds a "Redact" function to do everything render.Render previously did, but allowing to redact struct fields based on specific tags.
 
 ## Overview
 
@@ -50,29 +52,3 @@ render.Render: render.testStruct{S:"hello", V:(*map[string]int){"bar":1, "foo":0
 
 This is not intended to be a high-performance library, but it's not terrible
 either.
-
-Contributing
-------------
-
-  * Sign the [Google CLA](https://cla.developers.google.com/clas).
-  * Make sure your `user.email` and `user.name` are configured in `git config`.
-  * Install the [pcg](https://github.com/maruel/pre-commit-go) git hook:
-    `go get -u github.com/maruel/pre-commit-go/cmd/... && pcg`
-
-Run the following to setup the code review tool and create your first review:
-
-    git clone https://chromium.googlesource.com/chromium/tools/depot_tools.git $HOME/src/depot_tools
-    export PATH="$PATH:$HOME/src/depot_tools"
-    cd $GOROOT/github.com/luci/go-render
-    git checkout -b work origin/master
-
-    # hack hack
-
-    git commit -a -m "This is awesome\nR=joe@example.com"
-    # This will ask for your Google Account credentials.
-    git cl upload -s
-    # Wait for LGTM over email.
-    # Check the commit queue box in codereview website.
-    # Wait for the change to be tested and landed automatically.
-
-Use `git cl help` and `git cl help <cmd>` for more details.
