@@ -189,7 +189,7 @@ func (s *traverseState) render(str *strings.Builder, ptrs int, v reflect.Value, 
 				str.WriteString(vt.Field(i).Name)
 				str.WriteRune(':')
 			}
-			s.render(str, 0, v.Field(i), anon, false, opts)
+			s.render(str, 0, v.Field(i), anon, mask, opts)
 		}
 		str.WriteRune('}')
 
@@ -533,7 +533,7 @@ func (s *traverseState) redactField(str *strings.Builder, vt reflect.Type, v ref
 		return true
 	default:
 		// write field
-		if i > 0 {
+		if i > 0 && !opts.isRemoved(vt.Field(i-1)) {
 			str.WriteString(", ")
 		}
 		if !anon {
