@@ -76,10 +76,13 @@ func Render(v interface{}) string {
 // slices/arrays and prints their field values.
 //
 // Redact also redacts struct fields based on their tags:
+//
 // - `redact:"REMOVE"` will remove both the field and its value as if they did
 // not exist
+//
 // - `redact:"REPLACE"` will replace the value of the field by the "<redacted>"
 // placeholder
+//
 // - `redact:"MASK"` will mask by the character '#' 4 characters of the value
 // if its a builtin type, or of its members values if it is a
 // slice/array/map/struct.

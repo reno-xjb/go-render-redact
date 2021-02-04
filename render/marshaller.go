@@ -76,9 +76,9 @@ func NewMarshaller(opts ...MarshallerOption) (*Marshaller, error) {
 // the type as a regular one.
 //
 // Example:
-// WithTypeFormatter("time.Time", func (t interface{}) string {
-//   return t.(time.Time).Format(time.RFC3339)
-// })
+//  WithTypeFormatter("time.Time", func (t interface{}) string {
+//    return t.(time.Time).Format(time.RFC3339)
+//  })
 func WithTypeFormatter(typeName string, typeFormatter func(interface{}) string) MarshallerOption {
 	return func(m *Marshaller) error {
 		m.options.render.typeFormatters[typeName] = typeFormatter
@@ -101,7 +101,7 @@ func WithTypeFormatters(typeFormatters map[string]func(interface{}) string) Mars
 }
 
 // WithRecursionPlaceholder lets you set the placeholder used when a recursive
-// type has been detected. The placeholder will be surrouned by "<" and ">."
+// type has been detected. The placeholder will be surrounded by "<" and ">."
 //
 // The default value for this placeholder is "recursive"
 func WithRecursionPlaceholder(recursionPlaceholder string) MarshallerOption {
@@ -130,7 +130,7 @@ func WithRedactTag(redactTag string) MarshallerOption {
 }
 
 // WithReplacementPlaceholder lets you set the placeholder used when the redacting mode is
-// set to "REPLACE". The placeholder will be surrouned by "<" and ">."
+// set to "REPLACE". The placeholder will be surrounded by "<" and ">."
 //
 // The default value for this placeholder is "redacted"
 func WithReplacementPlaceholder(replacementPlaceholder string) MarshallerOption {
@@ -191,10 +191,13 @@ func (m *Marshaller) Render(v interface{}) string {
 // slices/arrays and prints their field values.
 //
 // Redact also redacts struct fields based on their tags:
+//
 // - `redact:"REMOVE"` will remove both the field and its value as if they did
 // not exist
+//
 // - `redact:"REPLACE"` will replace the value of the field by the "<redacted>"
 // placeholder
+//
 // - `redact:"MASK"` will mask by the character '#' 4 characters of the value
 // if its a builtin type, or of its members values if it is a
 // slice/array/map/struct.
