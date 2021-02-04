@@ -279,12 +279,12 @@ func TestMapSortRendering(t *testing.T) {
 	}
 }
 
-func assertRedactsLike(t *testing.T, name string, v interface{}, exp string, opts *Options) {
+func assertRedactsLike(t *testing.T, name string, v interface{}, exp string, opts ...MarshallerOption) {
 	var act string
 	if opts == nil {
 		act = Redact(v)
 	} else {
-		marshaller, err := NewMarshaller(opts)
+		marshaller, err := NewMarshaller(opts...)
 		if err != nil {
 			t.Fatalf("Error on creating marshaller: %v", err)
 		}
@@ -324,7 +324,7 @@ func TestRedactReplace(t *testing.T) {
 		}{123, "foo"}, `struct { a int "redact:\"REPLACE\""; b string }{<redacted>, "foo"}`},
 		{[]interface{}{nil, 1, 2, testStruct{Name: "foo", m: "bar"}}, `[]interface{}{interface{}(nil), 1, 2, render.testStruct{Name:<redacted>, I:<redacted>, m:<redacted>, Test:(*render.testStruct)(nil)}}`},
 	} {
-		assertRedactsLike(t, fmt.Sprintf("Input #%d", i), tc.a, tc.s, nil)
+		assertRedactsLike(t, fmt.Sprintf("Input #%d", i), tc.a, tc.s)
 	}
 }
 
@@ -356,7 +356,7 @@ func TestRedactMask(t *testing.T) {
 		}{123456, "foo"}, `struct { a int "redact:\"MASK\""; b string }{####56, "foo"}`},
 		{[]interface{}{nil, 1, 2, testStruct{Name: "foo", m: "bar"}}, `[]interface{}{interface{}(nil), 1, 2, render.testStruct{Name:"###", I:interface{}(nil), m:"###", Test:(*render.testStruct)(nil)}}`},
 	} {
-		assertRedactsLike(t, fmt.Sprintf("Input #%d", i), tc.a, tc.s, nil)
+		assertRedactsLike(t, fmt.Sprintf("Input #%d", i), tc.a, tc.s)
 	}
 }
 
@@ -388,7 +388,7 @@ func TestRedactRemove(t *testing.T) {
 		}{123456, "foo"}, `struct { a int "redact:\"REMOVE\""; b string }{"foo"}`},
 		{[]interface{}{nil, 1, 2, testStruct{Name: "foo", m: "bar"}}, `[]interface{}{interface{}(nil), 1, 2, render.testStruct{Test:(*render.testStruct)(nil)}}`},
 	} {
-		assertRedactsLike(t, fmt.Sprintf("Input #%d", i), tc.a, tc.s, nil)
+		assertRedactsLike(t, fmt.Sprintf("Input #%d", i), tc.a, tc.s)
 	}
 }
 
@@ -419,14 +419,7 @@ func TestOptions(t *testing.T) {
 		}{123, "foo"}, `struct { a int "my-tag:\"REPLACE\""; b string }{<••••>, "foo"}`},
 		{[]interface{}{nil, 1, 2, testStruct{Name: "foo", m: "m"}}, `[]interface{}{interface{}(nil), 1, 2, render.testStruct{I:interface{}(nil), m:"-"}}`},
 	} {
-		opts := &Options{
-			RedactTag:               "my-tag",
-			RedactReplacementString: "••••",
-			RedactMaskingLength:     2,
-			RedactMaskingReverse:    true,
-			RedactMaskingChar:       '-',
-		}
-		assertRedactsLike(t, fmt.Sprintf("Input #%d", i), tc.a, tc.s, opts)
+		assertRedactsLike(t, fmt.Sprintf("Input #%d", i), tc.a, tc.s, WithRedactTag("my-tag"), WithReplacementPlaceholder("••••"), WithMaskingLength(2), WithMaskingReverse(), WithMaskingChar('-'))
 	}
 }
 
@@ -449,29 +442,28 @@ func TestRegisteredTypes(t *testing.T) {
 		{time.Unix(0, 0), fmt.Sprintf(`time.Time(%s)`, time.Unix(0, 0).Format(time.RFC3339))},
 		{"shouldnotpanic", `"shouldnotpanic"`},
 	} {
-		opts := &Options{
-			RenderRegisteredTypes: map[string]func(interface{}) string{
-				"render.testStruct": func(inter interface{}) string {
-					s := inter.(testStruct)
-					return fmt.Sprintf("%s#%d", s.a, s.b)
-				},
-				"[]int": func(inter interface{}) string {
-					a := inter.([]int)
-					as := make([]string, len(a))
-					for i, ai := range a {
-						as[i] = strconv.Itoa(ai)
-					}
-					return strings.Join(as, "/")
-				},
-				"time.Time": func(inter interface{}) string {
-					return inter.(time.Time).Format(time.RFC3339)
-				},
-				"string": func(inter interface{}) string {
-					// this panics when called with a string that does not implement error interface
-					return inter.(error).Error()
-				},
-			},
+		opts := []MarshallerOption{
+			WithTypeFormatter("render.testStruct", func(inter interface{}) string {
+				s := inter.(testStruct)
+				return fmt.Sprintf("%s#%d", s.a, s.b)
+			}),
+			WithTypeFormatter("[]int", func(inter interface{}) string {
+				a := inter.([]int)
+				as := make([]string, len(a))
+				for i, ai := range a {
+					as[i] = strconv.Itoa(ai)
+				}
+				return strings.Join(as, "/")
+			}),
+			WithTypeFormatter("time.Time", func(inter interface{}) string {
+				return inter.(time.Time).Format(time.RFC3339)
+			}),
+			WithTypeFormatter("string", func(inter interface{}) string {
+				// this panics when called with a string that does not implement error interface
+				return inter.(error).Error()
+			}),
+			nil, // nil option should not affect marshaller
 		}
-		assertRedactsLike(t, fmt.Sprintf("Input #%d", i), tc.a, tc.s, opts)
+		assertRedactsLike(t, fmt.Sprintf("Input #%d", i), tc.a, tc.s, opts...)
 	}
 }

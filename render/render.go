@@ -51,16 +51,16 @@ type options struct {
 }
 
 type renderOptions struct {
-	recursiveString string
-	registeredTypes map[string]func(interface{}) string
+	recursionPlaceholder string
+	typeFormatters       map[string]func(interface{}) string
 }
 type redactOptions struct {
-	active            bool
-	tag               string
-	replacementString string
-	maskingChar       rune
-	maskingLength     int
-	maskingReverse    bool
+	active                 bool
+	tag                    string
+	replacementPlaceholder string
+	maskingChar            rune
+	maskingLength          int
+	maskingReverse         bool
 }
 
 // Render converts a structure to a string representation. Unlike the "%#v"
@@ -74,8 +74,15 @@ func Render(v interface{}) string {
 // Redact converts a structure to a string representation. Unlike the "%#v"
 // format string, this resolves pointer types' contents in structs, maps, and
 // slices/arrays and prints their field values.
-// It also redacts fields that are marke with a specific tag, that can be
-// configured in options
+//
+// Redact also redacts struct fields based on their tags:
+// - `redact:"REMOVE"` will remove both the field and its value as if they did
+// not exist
+// - `redact:"REPLACE"` will replace the value of the field by the "<redacted>"
+// placeholder
+// - `redact:"MASK"` will mask by the character '#' 4 characters of the value
+// if its a builtin type, or of its members values if it is a
+// slice/array/map/struct.
 func Redact(v interface{}) string {
 	m := newDefaultMarshaller()
 	return m.Redact(v)
@@ -155,7 +162,7 @@ func (s *traverseState) render(str *strings.Builder, ptrs int, v reflect.Value, 
 		s = s.forkFor(pe)
 		if s == nil {
 			str.WriteRune('<')
-			str.WriteString(opts.render.recursiveString)
+			str.WriteString(opts.render.recursionPlaceholder)
 			str.WriteRune('(')
 			if !implicit {
 				writeType(str, ptrs, vt)
@@ -548,7 +555,7 @@ func (s *traverseState) redactField(str *strings.Builder, vt reflect.Type, v ref
 		switch {
 		case tag == REPLACE:
 			str.WriteRune('<')
-			str.WriteString(opts.redact.replacementString)
+			str.WriteString(opts.redact.replacementPlaceholder)
 			str.WriteRune('>')
 			return true
 		case tag == MASK || mask:
@@ -592,7 +599,7 @@ func (o *options) isRemoved(vt reflect.StructField) bool {
 }
 
 func (o *options) callRegisteredTypeFormatter(str *strings.Builder, ptrs int, vt reflect.Type, v reflect.Value, implicit bool) (formatted bool) {
-	if typeFormatter, ok := o.render.registeredTypes[vt.String()]; ok {
+	if typeFormatter, ok := o.render.typeFormatters[vt.String()]; ok {
 		// register a recover to avoid panicking on user provided type formatter
 		defer func() {
 			if panicError := recover(); panicError != nil {
