@@ -29,6 +29,7 @@ type Marshaller struct {
 }
 
 var defaultRenderOptions = renderOptions{
+	registeredTypes: make(map[string]func(interface{}) string),
 	recursiveString: RECURSIVE,
 }
 var defaultRedactOptions = redactOptions{
@@ -52,6 +53,7 @@ func newDefaultMarshaller() *Marshaller {
 // Options allow to configure render
 type Options struct {
 	RenderRecursiveString   string
+	RenderRegisteredTypes   map[string]func(interface{}) string
 	RedactTag               string
 	RedactReplacementString string
 	RedactMaskingChar       rune
@@ -64,6 +66,9 @@ func NewMarshaller(opts *Options) (*Marshaller, error) {
 	m := newDefaultMarshaller()
 	if opts == nil {
 		return m, nil
+	}
+	if len(opts.RenderRegisteredTypes) != 0 {
+		m.options.render.registeredTypes = opts.RenderRegisteredTypes
 	}
 	if len(opts.RenderRecursiveString) != 0 {
 		err := validateRecursiveString(opts.RenderRecursiveString)

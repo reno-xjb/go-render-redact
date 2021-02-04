@@ -52,6 +52,7 @@ type options struct {
 
 type renderOptions struct {
 	recursiveString string
+	registeredTypes map[string]func(interface{}) string
 }
 type redactOptions struct {
 	active            bool
@@ -122,6 +123,10 @@ func (s *traverseState) render(str *strings.Builder, ptrs int, v reflect.Value, 
 	}
 	vt := v.Type()
 
+	// If a formatter is registered for this value type, call it and return
+	if formatted := opts.callRegisteredTypeFormatter(str, ptrs, vt, v, implicit); formatted {
+		return
+	}
 	// If the type being rendered is a potentially recursive type (a type that
 	// can contain itself as a member), we need to avoid recursion.
 	//
@@ -581,6 +586,26 @@ func (o *options) isRemoved(vt reflect.StructField) bool {
 		return false
 	}
 	if tag == REMOVE {
+		return true
+	}
+	return false
+}
+
+func (o *options) callRegisteredTypeFormatter(str *strings.Builder, ptrs int, vt reflect.Type, v reflect.Value, implicit bool) (formatted bool) {
+	if typeFormatter, ok := o.render.registeredTypes[vt.String()]; ok {
+		// register a recover to avoid panicking on user provided type formatter
+		defer func() {
+			if panicError := recover(); panicError != nil {
+				formatted = false
+			}
+		}()
+		formattedType := typeFormatter(v.Interface())
+		if !implicit {
+			writeType(str, ptrs, vt)
+		}
+		str.WriteRune('(')
+		str.WriteString(formattedType)
+		str.WriteRune(')')
 		return true
 	}
 	return false

@@ -9,8 +9,10 @@ import (
 	"reflect"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func init() {
@@ -423,6 +425,52 @@ func TestOptions(t *testing.T) {
 			RedactMaskingLength:     2,
 			RedactMaskingReverse:    true,
 			RedactMaskingChar:       '-',
+		}
+		assertRedactsLike(t, fmt.Sprintf("Input #%d", i), tc.a, tc.s, opts)
+	}
+}
+
+func TestRegisteredTypes(t *testing.T) {
+	t.Parallel()
+
+	type testStruct struct {
+		a string
+		b int
+	}
+
+	for i, tc := range []struct {
+		a interface{}
+		s string
+	}{
+		{testStruct{a: "foo", b: 42},
+			`render.testStruct(foo#42)`},
+		{(*testStruct)(nil), `(*render.testStruct)(nil)`},
+		{[]int{1, 2, 3, 4, 5}, `[]int(1/2/3/4/5)`},
+		{time.Unix(0, 0), fmt.Sprintf(`time.Time(%s)`, time.Unix(0, 0).Format(time.RFC3339))},
+		{"shouldnotpanic", `"shouldnotpanic"`},
+	} {
+		opts := &Options{
+			RenderRegisteredTypes: map[string]func(interface{}) string{
+				"render.testStruct": func(inter interface{}) string {
+					s := inter.(testStruct)
+					return fmt.Sprintf("%s#%d", s.a, s.b)
+				},
+				"[]int": func(inter interface{}) string {
+					a := inter.([]int)
+					as := make([]string, len(a))
+					for i, ai := range a {
+						as[i] = strconv.Itoa(ai)
+					}
+					return strings.Join(as, "/")
+				},
+				"time.Time": func(inter interface{}) string {
+					return inter.(time.Time).Format(time.RFC3339)
+				},
+				"string": func(inter interface{}) string {
+					// this panics when called with a string that does not implement error interface
+					return inter.(error).Error()
+				},
+			},
 		}
 		assertRedactsLike(t, fmt.Sprintf("Input #%d", i), tc.a, tc.s, opts)
 	}
