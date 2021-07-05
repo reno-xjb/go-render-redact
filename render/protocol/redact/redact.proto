@@ -1,0 +1,12 @@
+syntax = "proto3";
+
+option go_package = "github.com/reno-xjb/go-render-redact/render/protocol/redact";
+
+import "google/protobuf/descriptor.proto";
+import "mode.proto";
+
+package redact;
+
+extend google.protobuf.FieldOptions {
+    redact.Mode mode = 50001;
+}

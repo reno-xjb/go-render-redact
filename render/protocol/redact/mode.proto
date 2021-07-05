@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+option go_package = "github.com/reno-xjb/go-render-redact/render/protocol/redact";
+
+package redact;
+
+enum Mode {
+    REMOVE = 0;
+    REPLACE = 1;
+    MASK = 2;
+}

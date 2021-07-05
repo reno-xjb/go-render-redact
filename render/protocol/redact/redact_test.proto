@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+option go_package = "github.com/reno-xjb/go-render-redact/render/protocol/redact";
+
+import "google/protobuf/descriptor.proto";
+import "mode.proto";
+import "redact.proto";
+
+package redact;
+
+extend google.protobuf.FieldOptions {
+    redact.Mode tag2 = 50002;
+}
+extend google.protobuf.FieldOptions {
+    redact.Mode clear = 50003;
+}
+
+enum MyEnum {
+    A = 0;
+    B = 1;
+    C = 2;
+}
+
+message Primitives {
+    int32 my_int32 = 1 [(redact.mode) = REMOVE];
+    uint32 my_uint32 = 2 [(redact.mode) = REMOVE];
+    int64 my_int64 = 3 [(redact.mode) = REMOVE];
+    uint64 my_uint64 = 4 [(redact.mode) = REMOVE];
+    float my_float = 5 [(redact.mode) = REMOVE];
+    double my_double = 6 [(redact.mode) = REMOVE];
+    bytes my_bytes = 7 [(redact.mode) = REMOVE];
+    string my_string = 8 [(redact.mode) = REMOVE];
+    bool my_bool = 9 [(redact.mode) = REMOVE];
+    MyEnum my_enum = 10 [(redact.mode) = REMOVE];
+}
+
+message SimpleMessage {
+    bool my_bool = 1 [(redact.mode) = REMOVE];
+    string my_string = 2 [(redact.mode) = REMOVE];
+    int32 my_int32 = 3 [(redact.mode) = REMOVE];
+}
+
+message Lists {
+ repeated string list = 1 [(redact.mode) = REMOVE];
+ repeated SimpleMessage message_list = 2 [(redact.tag2) = REMOVE];
+}
+
+message Recursive {
+  string test_string = 1;
+  Recursive r = 2;
+}
+

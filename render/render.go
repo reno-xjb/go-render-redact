@@ -58,7 +58,7 @@ type redactOptions struct {
 	active                 bool
 	tag                    string
 	replacementPlaceholder string
-	maskingChar            rune
+	maskingChar            []byte
 	maskingLength          int
 	maskingReverse         bool
 }
@@ -95,12 +95,8 @@ func Redact(v interface{}) string {
 //
 // This is overridable so that the test suite can have deterministic pointer
 // values in its expectations.
-var renderPointer = func(str *strings.Builder, p uintptr, mask bool, opts *options) {
-	if mask {
-		opts.mask(str, fmt.Sprintf("0x%016x", p))
-	} else {
-		fmt.Fprintf(str, "0x%016x", p)
-	}
+var renderPointer = func(masker *MaskWriter, p uintptr) {
+	fmt.Fprintf(masker, "0x%016x", p)
 }
 
 // traverseState is used to note and avoid recursion as struct members are being
@@ -126,15 +122,15 @@ func (s *traverseState) forkFor(ptr uintptr) *traverseState {
 	return fs
 }
 
-func (s *traverseState) render(str *strings.Builder, ptrs int, v reflect.Value, implicit bool, mask bool, opts *options) {
+func (s *traverseState) render(masker *MaskWriter, ptrs int, v reflect.Value, implicit bool, opts *options) {
 	if v.Kind() == reflect.Invalid {
-		str.WriteString("nil")
+		masker.str.WriteString("nil")
 		return
 	}
 	vt := v.Type()
 
 	// If a formatter is registered for this value type, call it and return
-	if formatted := opts.callRegisteredTypeFormatter(str, ptrs, vt, v, implicit); formatted {
+	if formatted := opts.callRegisteredTypeFormatter(masker.str, ptrs, vt, v, implicit); formatted {
 		return
 	}
 	// If the type being rendered is a potentially recursive type (a type that
@@ -164,13 +160,13 @@ func (s *traverseState) render(str *strings.Builder, ptrs int, v reflect.Value, 
 	if pe != 0 {
 		s = s.forkFor(pe)
 		if s == nil {
-			str.WriteRune('<')
-			str.WriteString(opts.render.recursionPlaceholder)
-			str.WriteRune('(')
+			masker.str.WriteRune('<')
+			masker.str.WriteString(opts.render.recursionPlaceholder)
+			masker.str.WriteRune('(')
 			if !implicit {
-				writeType(str, ptrs, vt)
+				writeType(masker.str, ptrs, vt)
 			}
-			str.WriteString(")>")
+			masker.str.WriteString(")>")
 			return
 		}
 	}
@@ -187,34 +183,34 @@ func (s *traverseState) render(str *strings.Builder, ptrs int, v reflect.Value, 
 	switch vk {
 	case reflect.Struct:
 		if !implicit {
-			writeType(str, ptrs, vt)
+			writeType(masker.str, ptrs, vt)
 		}
 		structAnon := vt.Name() == ""
-		str.WriteRune('{')
+		masker.str.WriteRune('{')
 		for i := 0; i < vt.NumField(); i++ {
 			anon := structAnon && isAnon(vt.Field(i).Type)
-			if opts.redact.active && s.redactField(str, vt, v, i, anon, mask, opts) {
+			if opts.redact.active && s.redactField(masker, vt, v, i, anon, opts) {
 				continue
 			}
 			if i > 0 && (!opts.redact.active || !opts.isRemoved(vt.Field(i-1))) {
-				str.WriteString(", ")
+				masker.str.WriteString(", ")
 			}
 
 			if !anon {
-				str.WriteString(vt.Field(i).Name)
-				str.WriteRune(':')
+				masker.str.WriteString(vt.Field(i).Name)
+				masker.str.WriteRune(':')
 			}
-			s.render(str, 0, v.Field(i), anon, mask, opts)
+			s.render(masker, 0, v.Field(i), anon, opts)
 		}
-		str.WriteRune('}')
+		masker.str.WriteRune('}')
 
 	case reflect.Slice:
 		if v.IsNil() {
 			if !implicit {
-				writeType(str, ptrs, vt)
-				str.WriteString("(nil)")
+				writeType(masker.str, ptrs, vt)
+				masker.str.WriteString("(nil)")
 			} else {
-				str.WriteString("nil")
+				masker.str.WriteString("nil")
 			}
 			return
 		}
@@ -222,27 +218,27 @@ func (s *traverseState) render(str *strings.Builder, ptrs int, v reflect.Value, 
 
 	case reflect.Array:
 		if !implicit {
-			writeType(str, ptrs, vt)
+			writeType(masker.str, ptrs, vt)
 		}
 		anon := vt.Name() == "" && isAnon(vt.Elem())
-		str.WriteString("{")
+		masker.str.WriteString("{")
 		for i := 0; i < v.Len(); i++ {
 			if i > 0 {
-				str.WriteString(", ")
+				masker.str.WriteString(", ")
 			}
 
-			s.render(str, 0, v.Index(i), anon, mask, opts)
+			s.render(masker, 0, v.Index(i), anon, opts)
 		}
-		str.WriteRune('}')
+		masker.str.WriteRune('}')
 
 	case reflect.Map:
 		if !implicit {
-			writeType(str, ptrs, vt)
+			writeType(masker.str, ptrs, vt)
 		}
 		if v.IsNil() {
-			str.WriteString("(nil)")
+			masker.str.WriteString("(nil)")
 		} else {
-			str.WriteString("{")
+			masker.str.WriteString("{")
 
 			mkeys := v.MapKeys()
 			tryAndSortMapKeys(vt, mkeys)
@@ -252,14 +248,14 @@ func (s *traverseState) render(str *strings.Builder, ptrs int, v reflect.Value, 
 			valAnon := vt.Name() == "" && isAnon(vt.Elem())
 			for i, mk := range mkeys {
 				if i > 0 {
-					str.WriteString(", ")
+					masker.str.WriteString(", ")
 				}
 
-				s.render(str, 0, mk, keyAnon, false, opts)
-				str.WriteString(":")
-				s.render(str, 0, v.MapIndex(mk), valAnon, mask, opts)
+				s.render(masker, 0, mk, keyAnon, opts)
+				masker.str.WriteString(":")
+				s.render(masker, 0, v.MapIndex(mk), valAnon, opts)
 			}
-			str.WriteRune('}')
+			masker.str.WriteRune('}')
 		}
 
 	case reflect.Ptr:
@@ -267,60 +263,54 @@ func (s *traverseState) render(str *strings.Builder, ptrs int, v reflect.Value, 
 		fallthrough
 	case reflect.Interface:
 		if v.IsNil() {
-			writeType(str, ptrs, v.Type())
-			str.WriteString("(nil)")
+			writeType(masker.str, ptrs, v.Type())
+			masker.str.WriteString("(nil)")
 		} else {
-			s.render(str, ptrs, v.Elem(), false, mask, opts)
+			s.render(masker, ptrs, v.Elem(), false, opts)
 		}
 
 	case reflect.Chan, reflect.Func, reflect.UnsafePointer:
-		writeType(str, ptrs, vt)
-		str.WriteRune('(')
-		renderPointer(str, v.Pointer(), mask, opts)
-		str.WriteRune(')')
+		writeType(masker.str, ptrs, vt)
+		masker.str.WriteRune('(')
+		renderPointer(masker, v.Pointer())
+		masker.str.WriteRune(')')
 
 	default:
 		tstr := vt.String()
 		implicit = implicit || (ptrs == 0 && builtinTypeMap[vk] == tstr)
 		if !implicit {
-			writeType(str, ptrs, vt)
-			str.WriteRune('(')
+			writeType(masker.str, ptrs, vt)
+			masker.str.WriteRune('(')
 		}
 
 		switch vk {
 		case reflect.String:
 			value := v.String()
-			if mask {
-				valueStr := strings.Builder{}
-				opts.mask(&valueStr, value)
-				value = valueStr.String()
+			if masker.masked {
+				writer := NewDefaultMaskWriter(masker.masked, opts.redact)
+				writer.WriteString(value)
+				value = writer.String()
 			}
-			fmt.Fprintf(str, "%q", value)
+			fmt.Fprintf(masker.str, "%q", value)
 		default:
-			valueStr := strings.Builder{}
 			switch vk {
 			case reflect.Bool:
-				fmt.Fprintf(&valueStr, "%v", v.Bool())
+				fmt.Fprintf(masker, "%v", v.Bool())
 			case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-				fmt.Fprintf(&valueStr, "%d", v.Int())
+				fmt.Fprintf(masker, "%d", v.Int())
 
 			case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-				fmt.Fprintf(&valueStr, "%d", v.Uint())
+				fmt.Fprintf(masker, "%d", v.Uint())
 
 			case reflect.Float32, reflect.Float64:
-				fmt.Fprintf(&valueStr, "%g", v.Float())
+				fmt.Fprintf(masker, "%g", v.Float())
 			case reflect.Complex64, reflect.Complex128:
-				fmt.Fprintf(&valueStr, "%g", v.Complex())
-			}
-			if mask {
-				opts.mask(str, valueStr.String())
-			} else {
-				str.WriteString(valueStr.String())
+				fmt.Fprintf(masker, "%g", v.Complex())
 			}
 		}
 
 		if !implicit {
-			str.WriteRune(')')
+			masker.str.WriteRune(')')
 		}
 	}
 }
@@ -537,7 +527,7 @@ func tryAndSortMapKeys(mt reflect.Type, k []reflect.Value) {
 	}
 }
 
-func (s *traverseState) redactField(str *strings.Builder, vt reflect.Type, v reflect.Value, i int, anon bool, mask bool, opts *options) bool {
+func (s *traverseState) redactField(masker *MaskWriter, vt reflect.Type, v reflect.Value, i int, anon bool, opts *options) bool {
 	tag, ok := vt.Field(i).Tag.Lookup(opts.redact.tag)
 	if !ok {
 		return false
@@ -549,45 +539,25 @@ func (s *traverseState) redactField(str *strings.Builder, vt reflect.Type, v ref
 	default:
 		// write field
 		if i > 0 && !opts.isRemoved(vt.Field(i-1)) {
-			str.WriteString(", ")
+			masker.str.WriteString(", ")
 		}
 		if !anon {
-			str.WriteString(vt.Field(i).Name)
-			str.WriteRune(':')
+			masker.str.WriteString(vt.Field(i).Name)
+			masker.str.WriteRune(':')
 		}
 		switch {
 		case tag == REPLACE:
-			str.WriteRune('<')
-			str.WriteString(opts.redact.replacementPlaceholder)
-			str.WriteRune('>')
+			masker.str.WriteRune('<')
+			masker.str.WriteString(opts.redact.replacementPlaceholder)
+			masker.str.WriteRune('>')
 			return true
-		case tag == MASK || mask:
-			s.render(str, 0, v.Field(i), anon, true, opts)
+		case tag == MASK || masker.masked:
+			maskedMasker := NewMaskWriter(masker.str, true, opts.redact)
+			s.render(maskedMasker, 0, v.Field(i), anon, opts)
 			return true
 		}
 	}
 	return false
-}
-
-func (o *options) mask(str *strings.Builder, value string) {
-	if !o.redact.active {
-		str.WriteString(value)
-		return
-	}
-	// whole string
-	if o.redact.maskingLength < 0 || o.redact.maskingLength >= len(value) {
-		str.WriteString(strings.Repeat(string(o.redact.maskingChar), len(value)))
-		return
-	}
-	// reverse
-	if o.redact.maskingReverse {
-		str.WriteString(value[:len(value)-o.redact.maskingLength])
-		str.WriteString(strings.Repeat(string(o.redact.maskingChar), o.redact.maskingLength))
-		return
-	}
-	// straight
-	str.WriteString(strings.Repeat(string(o.redact.maskingChar), o.redact.maskingLength))
-	str.WriteString(value[o.redact.maskingLength:])
 }
 
 func (o *options) isRemoved(vt reflect.StructField) bool {
@@ -603,13 +573,19 @@ func (o *options) isRemoved(vt reflect.StructField) bool {
 
 func (o *options) callRegisteredTypeFormatter(str *strings.Builder, ptrs int, vt reflect.Type, v reflect.Value, implicit bool) (formatted bool) {
 	if typeFormatter, ok := o.render.typeFormatters[vt.String()]; ok {
+		fmt.Println(o.render.typeFormatters, vt.String())
 		// register a recover to avoid panicking on user provided type formatter
 		defer func() {
 			if panicError := recover(); panicError != nil {
+				fmt.Println("PANIC?", panicError)
 				formatted = false
 			}
 		}()
-		formattedType := typeFormatter(v.Interface())
+		value, ok := getInterface(v)
+		if !ok {
+			return false
+		}
+		formattedType := typeFormatter(value)
 		if !implicit {
 			writeType(str, ptrs, vt)
 		}
@@ -619,4 +595,78 @@ func (o *options) callRegisteredTypeFormatter(str *strings.Builder, ptrs int, vt
 		return true
 	}
 	return false
+}
+
+func getInterface(v reflect.Value) (interface{}, bool) {
+	if v.CanInterface() {
+		return v.Interface(), true
+	}
+	switch v.Kind() {
+	case reflect.Invalid:
+		return nil, false
+	case reflect.Bool:
+		return v.Bool(), true
+	case reflect.Int:
+		return int(v.Int()), true
+	case reflect.Int8:
+		return int8(v.Int()), true
+	case reflect.Int16:
+		return int16(v.Int()), true
+	case reflect.Int32:
+		return int32(v.Int()), true
+	case reflect.Int64:
+		return v.Int(), true
+	case reflect.Uint:
+		return uint(v.Uint()), true
+	case reflect.Uint8:
+		return uint8(v.Uint()), true
+	case reflect.Uint16:
+		return uint16(v.Uint()), true
+	case reflect.Uint32:
+		return uint32(v.Uint()), true
+	case reflect.Uint64:
+		return v.Uint(), true
+	case reflect.Uintptr:
+		return uintptr(v.Uint()), true
+	case reflect.Float32:
+		return float32(v.Float()), true
+	case reflect.Float64:
+		return v.Float(), true
+	case reflect.Complex64:
+		return complex64(v.Complex()), true
+	case reflect.Complex128:
+		return v.Complex(), true
+	case reflect.Array, reflect.Slice:
+		var copy reflect.Value
+		reflect.Copy(copy, v)
+		return copy.Interface(), true
+	case reflect.Chan, reflect.Func:
+		return v.Pointer(), true
+	case reflect.Map:
+		return v.Pointer(), true
+	case reflect.Ptr:
+		return v.Pointer(), true
+		// reflect.Chan
+		// reflect.Func
+		// reflect.Interface
+		// reflect.Map
+		// reflect.Ptr
+		// reflect.Slice
+	case reflect.String:
+		return v.String(), true
+	case reflect.Struct:
+		s := reflect.New(v.Type())
+		for i := 0; i < v.NumField(); i++ {
+			fieldValue, ok := getInterface(v.Field(i))
+			if !ok {
+				return nil, false
+			}
+			s.Elem().Field(i).Set(reflect.ValueOf(fieldValue))
+		}
+		return s.Elem().Interface(), true
+	case reflect.UnsafePointer:
+		return v.UnsafeAddr(), true
+	default:
+		return nil, true
+	}
 }

@@ -18,12 +18,8 @@ import (
 func init() {
 	// For testing purposes, pointers will render as "PTR" so that they are
 	// deterministic.
-	renderPointer = func(str *strings.Builder, p uintptr, mask bool, opts *options) {
-		if mask {
-			opts.mask(str, "PTR")
-		} else {
-			str.WriteString("PTR")
-		}
+	renderPointer = func(masker *MaskWriter, p uintptr) {
+		masker.WriteString("PTR")
 	}
 }
 
